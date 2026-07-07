@@ -666,6 +666,37 @@ def main() -> None:
 | `judge()` | `bool` | `True` = 可通过全部判断 |
 | `point_make_and_map()` | `tuple(ndarray, ndarray)` | (锥桶点云, 地面点云) |
 
+### 5.3 当前纯 Python 实现范围
+
+`lidar_simulator.py` 已完成 ROS 话题订阅/发布之外的 LiDAR 模拟核心功能，主要入口为 `LidarSimulator`：
+
+```python
+from lidar_simulator import LidarSimulator, LidarConfig
+
+sim = LidarSimulator(LidarConfig(), seed=42)
+scan = sim.simulate_scan(cones, vehicle_pose)
+```
+
+`simulate_scan()` 返回：
+
+| 字段 | 类型 | 说明 |
+|------|------|------|
+| `point_cloud` | `np.ndarray, shape=(N, 3)` | 锥桶表面点 + 地面点，LiDAR 坐标系 |
+| `cone_points` | `np.ndarray, shape=(M, 3)` | 所有可见锥桶生成的表面反射点 |
+| `ground_points` | `np.ndarray, shape=(K, 3)` | 随机地面点 |
+| `visible_cones` | `list[dict]` | 通过前方、FOV、距离、遮挡、漏检判断后的锥桶 |
+| `frame_id` | `str` | 当前固定为 `lidar` |
+
+已实现能力：
+
+- map/world 坐标与 LiDAR 坐标互转
+- 前方判断、水平 FOV 判断、水平距离判断
+- 基于锥桶尺寸表的 AABB 遮挡判断
+- 锥桶表面反射点生成，含高斯噪声
+- 地面点生成，供地面分割链路使用
+- 随机种子固定，保证相同输入可复现
+- `point_make_and_map()`、`plane_make()` 等兼容函数
+
 ---
 
 ## 6. 数据结构
