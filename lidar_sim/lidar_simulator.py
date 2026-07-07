@@ -214,7 +214,7 @@ def plane_make():
 def main(): 
 
 
-    
+
 
 
     car_position = np.array([0.0, 0.0, 0.0])
@@ -226,7 +226,7 @@ def main():
     car_position = np.asarray(car_position, dtype=float)
     cone_position = np.asarray(cone_position, dtype=float)
 
-    map = numpy.zeros((100, 100), dtype=int)
+    map = np.zeros((100, 100), dtype=int)
 
     obstacles = [{"position": np.array([2.5, 0.0, 0.0]), "color": "yellow"}]
     # "position": cone_position ,"color": "yellow"
