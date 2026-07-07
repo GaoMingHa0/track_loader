@@ -278,9 +278,20 @@ def distance_judge(car_position, cone_position,
 
 | 方案 | 复杂度 | 适用场景 | 推荐 |
 |------|--------|----------|------|
-| 射线投射 (Ray Casting) | O(n) | 有离散障碍物 | ⭐ 推荐 |
+| 线段-AABB 相交 | O(n) | 锥桶作为离散遮挡物 | ⭐ 推荐 |
 | 深度缓冲 (Z-Buffer) | O(像素) | 有深度图 | 适用于后期 |
-| 无遮挡（跳过） | O(1) | 简单场景/V1 | MVP 可用 |
+| 无遮挡（跳过） | O(1) | 简单场景/V1 | 仅用于临时调试 |
+
+#### 锥桶遮挡模型
+
+遮挡物不再简化为球体，而是根据锥桶规格表建立竖直轴对齐包围盒（AABB）。锥桶位置表示底面中心，尺寸单位为米。
+
+| 锥桶名称 | 颜色/特征 | 反光条/条纹 | 尺寸 |
+|---------|----------|-------------|------|
+| 大号橘色桩桶 | 橘色 | 双反光条 | 0.35 × 0.35 × 0.70 |
+| 小号红色桩桶 | 红色 | 单反光条 | 0.20 × 0.20 × 0.30 |
+| 小号黄色桩桶 | 黄色 | 黑色条纹 | 0.20 × 0.20 × 0.30 |
+| 小号蓝色桩桶 | 蓝色 | 单反光条 | 0.20 × 0.20 × 0.30 |
 
 #### 射线投射原理
 
@@ -290,7 +301,7 @@ def distance_judge(car_position, cone_position,
               │ 检查射线是否与任何障碍物相交
               │
          ┌────┴────┐
-         │  障碍物   │  ← 若相交，则锥桶被遮挡
+         │ 锥桶AABB │  ← 若线段与包围盒相交，则目标锥桶被遮挡
          └─────────┘
 ```
 
@@ -304,11 +315,21 @@ def occlusion_judge(car_position, cone_position, obstacles):
     Parameters:
         car_position  : np.array([x, y, z])  LiDAR位置
         cone_position : np.array([x, y, z])  锥桶位置
-        obstacles     : list[np.array]        障碍物列表（每个为球体，含中心和半径）
+        obstacles     : list[dict]            障碍物列表（锥桶位置 + 颜色/类型/尺寸）
 
     Returns:
         bool: True = 被遮挡, False = 未被遮挡
     """
+```
+
+#### 障碍物输入格式
+
+```python
+obstacles = [
+    {'position': np.array([2.5, 0.0, 0.0]), 'color': 'yellow'},
+    {'position': np.array([4.0, 0.2, 0.0]), 'type': 'large_orange'},
+    {'position': np.array([6.0, -0.1, 0.0]), 'size': [0.20, 0.20, 0.30]},
+]
 ```
 
 ---
@@ -397,14 +418,15 @@ def judge(car_position, car_heading, cone_position, obstacles=None):
         \\  /
          \\/
          
-    简化为圆柱体参数:
-    - 底面半径: 0.1m
-    - 顶面半径: 0.03m
-    - 高度: 0.5m
+    点云采样使用锥台近似，尺寸来自锥桶规格表:
+    - 大号橘色桩桶: 0.35 × 0.35 × 0.70m
+    - 小号红/黄/蓝桩桶: 0.20 × 0.20 × 0.30m
+    - 底面半径: max(width, depth) / 2
+    - 顶面半径: bottom_radius * 0.3
 
     z (高度)
     ↑
-    0.5m ━━━  ← 顶部 (半径 0.03m)
+    H ━━━  ← 顶部
     │  ╱╲
     │ ╱  ╲
     │╱    ╲
@@ -415,8 +437,9 @@ def judge(car_position, car_heading, cone_position, obstacles=None):
 
 ```
     对于每个可见锥桶:
-        1. 随机选取 12-16 个高度层（在 0 ~ 0.5m 之间均匀采样）
-        2. 对每个高度层:
+        1. 按锥桶类型读取尺寸 [width, depth, H]
+        2. 随机选取 12-16 个高度层（在 0 ~ H 之间均匀采样）
+        3. 对每个高度层:
             a. 计算该高度的锥桶半径（线性插值）
             b. 随机生成一个角度 θ ∈ [0, 2π)
             c. 计算点的位置:
@@ -675,11 +698,12 @@ cones = [
     np.array([3.0, 6.0, 0.0]),     # 锥桶3
 ]
 
-# 锥桶参数
-cone_params = {
-    'bottom_radius': 0.1,    # 底面半径 (m)
-    'top_radius'   : 0.03,   # 顶面半径 (m)
-    'height'       : 0.5,    # 高度 (m)
+# 锥桶规格表，尺寸为 [宽, 深, 高]，单位 m
+cone_specs = {
+    'large_orange': [0.35, 0.35, 0.70],  # 大号橘色桩桶，发车线/收车线
+    'small_red'   : [0.20, 0.20, 0.30],  # 小号红色桩桶，起点/终点区域
+    'small_yellow': [0.20, 0.20, 0.30],  # 小号黄色桩桶，赛道右侧边界
+    'small_blue'  : [0.20, 0.20, 0.30],  # 小号蓝色桩桶，赛道左侧边界
 }
 ```
 
@@ -697,10 +721,11 @@ car_state = {
 ### 6.4 障碍物数据
 
 ```python
-# 障碍物列表（简化为球体）
+# 障碍物列表（锥桶按规格表转换为竖直 AABB）
 obstacles = [
-    {'center': np.array([2.0, 1.0, 0.5]), 'radius': 0.5},   # 障碍物1
-    {'center': np.array([5.0, 3.0, 0.3]), 'radius': 0.3},   # 障碍物2
+    {'position': np.array([2.0, 1.0, 0.0]), 'color': 'yellow'},
+    {'position': np.array([5.0, 3.0, 0.0]), 'type': 'large_orange'},
+    {'position': np.array([6.0, 2.0, 0.0]), 'size': [0.20, 0.20, 0.30]},
 ]
 ```
 
@@ -716,9 +741,8 @@ obstacles = [
 | `FOV_HALF` | θ_half | 60 | ° | 视场半角 |
 | `MIN_DIST` | d_min | 1.5 | m | 最小有效距离 |
 | `MAX_DIST` | d_max | 50.0 | m | 最大有效距离 |
-| `CONE_BOTTOM_R` | r_bot | 0.10 | m | 锥桶底面半径 |
-| `CONE_TOP_R` | r_top | 0.03 | m | 锥桶顶面半径 |
-| `CONE_HEIGHT` | h_cone | 0.50 | m | 锥桶高度 |
+| `LARGE_ORANGE_SIZE` | — | 0.35×0.35×0.70 | m | 大号橘色桩桶尺寸 |
+| `SMALL_CONE_SIZE` | — | 0.20×0.20×0.30 | m | 小号红/黄/蓝桩桶尺寸 |
 | `POINTS_PER_CONE` | n_pt | 12~16 | 个 | 每锥桶采样点数 |
 | `NOISE_STD` | σ | 0.02 | m | 高斯噪声标准差 |
 | `GROUND_Z` | z_gnd | -1.0 | m | 地面点高度（相对 LiDAR） |
@@ -1049,10 +1073,11 @@ FOV_HALF = 60           # 视场半角 (°)
 MIN_DIST = 1.5          # 最小有效距离 (m)
 MAX_DIST = 50.0         # 最大有效距离 (m)
 
-# ─── 锥桶参数 ───
-CONE_BOTTOM_R = 0.10    # 底面半径 (m)
-CONE_TOP_R = 0.03       # 顶面半径 (m)
-CONE_HEIGHT = 0.50      # 高度 (m)
+# ─── 锥桶规格参数（宽, 深, 高，单位 m）───
+LARGE_ORANGE_SIZE = (0.35, 0.35, 0.70)  # 大号橘色桩桶
+SMALL_RED_SIZE = (0.20, 0.20, 0.30)     # 小号红色桩桶
+SMALL_YELLOW_SIZE = (0.20, 0.20, 0.30)  # 小号黄色桩桶
+SMALL_BLUE_SIZE = (0.20, 0.20, 0.30)    # 小号蓝色桩桶
 
 # ─── 点云生成参数 ───
 POINTS_PER_CONE_MIN = 12    # 每锥桶最少点数
@@ -1113,9 +1138,15 @@ def distance_judge(car_position, cone_position, min_dist=1.5, max_dist=50.0):
 
 
 def occlusion_judge(car_position, cone_position, obstacles):
-    """判断锥桶是否被遮挡（V1 版本暂不实现）"""
-    # TODO: 实现射线投射算法
-    return False  # 默认无遮挡
+    """判断锥桶是否被遮挡：锥桶按规格表转换为竖直 AABB。"""
+    if not obstacles:
+        return False
+    # 对每个障碍锥桶：
+    # 1. 根据 color/type/size 得到 [宽, 深, 高]
+    # 2. 以 position 为底面中心生成 AABB
+    # 3. 用 slab test 判断 LiDAR→目标锥桶线段是否与 AABB 相交
+    # 任一相交即返回 True
+    ...
 
 
 def judge(car_position, car_heading, cone_position, obstacles=None):
