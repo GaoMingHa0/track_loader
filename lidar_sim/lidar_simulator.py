@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Iterable, Optional
+from pathlib import Path
+from typing import Any, Dict, Iterable, Optional, Tuple
 
 import numpy as np
+import yaml
 
 
 COLOR_UNKNOWN = 0
@@ -18,11 +20,11 @@ class ConeSpec:
     name: str
     color: str
     color_id: int
-    size: tuple[float, float, float]  # width, depth, height in meters
-    aliases: tuple[str, ...]
+    size: Tuple[float, float, float]  # width, depth, height in meters
+    aliases: Tuple[str, ...]
 
 
-CONE_SPECS: dict[str, ConeSpec] = {
+CONE_SPECS: Dict[str, ConeSpec] = {
     "large_orange": ConeSpec(
         name="large_orange",
         color="orange",
@@ -69,7 +71,7 @@ class LidarConfig:
     ground_points_max: int = 500
     ground_z_std: float = 0.05
     lidar_height: float = 1.0
-    lidar_offset: tuple[float, float, float] = (0.0, 0.0, 1.0)
+    lidar_offset: Tuple[float, float, float] = (0.0, 0.0, 1.0)
     detection_probability: float = 1.0
     include_ground: bool = True
     enable_occlusion: bool = True
@@ -105,7 +107,7 @@ def _yaw_rotation(yaw: float) -> np.ndarray:
     )
 
 
-def parse_pose(pose: Any) -> tuple[np.ndarray, float]:
+def parse_pose(pose: Any) -> Tuple[np.ndarray, float]:
     """Return base position [x, y, z] and yaw from dict or array-like pose."""
     if isinstance(pose, dict):
         if "position" in pose:
@@ -193,10 +195,65 @@ def normalize_cone(cone: Any, default_type: str = DEFAULT_CONE_TYPE) -> ConeReco
     )
 
 
+def load_track_yaml(track_file: Any) -> Tuple[list, list]:
+    """
+    Load a simulator track YAML directly into cone dictionaries and start pose.
+
+    Returns:
+        cones: list of dictionaries accepted by LidarSimulator
+        start_pose: [x, y, z, yaw]
+    """
+    path = Path(track_file).expanduser()
+    if not path.exists():
+        raise FileNotFoundError(f"Track file not found: {path}")
+
+    with path.open("r", encoding="utf-8") as stream:
+        data = yaml.safe_load(stream) or {}
+
+    track = data.get("track", data)
+    start_pose_data = track.get("start_pose", {})
+    start_pose = [
+        float(start_pose_data.get("x", 0.0)),
+        float(start_pose_data.get("y", 0.0)),
+        float(start_pose_data.get("z", 0.0)),
+        float(start_pose_data.get("yaw", 0.0)),
+    ]
+
+    cones = []
+    cone_groups = (
+        ("blue_cones", "blue", "small_blue"),
+        ("yellow_cones", "yellow", "small_yellow"),
+        ("orange_cones", "orange", "large_orange"),
+        ("red_cones", "red", "small_red"),
+        ("unknown_cones", "unknown", DEFAULT_CONE_TYPE),
+    )
+    for key, color, cone_type in cone_groups:
+        for entry in track.get(key, []) or []:
+            if isinstance(entry, dict):
+                position = [
+                    float(entry.get("x", 0.0)),
+                    float(entry.get("y", 0.0)),
+                    float(entry.get("z", 0.0)),
+                ]
+            else:
+                values = np.asarray(entry, dtype=float).reshape(-1)
+                if values.shape[0] < 2:
+                    raise ValueError(f"Invalid cone entry in {path}: {entry!r}")
+                position = [
+                    float(values[0]),
+                    float(values[1]),
+                    float(values[2]) if values.shape[0] > 2 else 0.0,
+                ]
+
+            cones.append({"position": position, "color": color, "type": cone_type})
+
+    return cones, start_pose
+
+
 def lidar_origin_from_pose(
     vehicle_pose: Any,
     lidar_offset: Iterable[float] = (0.0, 0.0, 1.0),
-) -> tuple[np.ndarray, float]:
+) -> Tuple[np.ndarray, float]:
     base_position, yaw = parse_pose(vehicle_pose)
     offset = _as_vector3(lidar_offset, "lidar_offset")
     lidar_origin = base_position + _yaw_rotation(yaw) @ offset
@@ -265,7 +322,7 @@ def distance_judge(
     return bool(min_dist <= dist <= max_dist)
 
 
-def _parse_obstacle_box(obstacle: Any) -> tuple[np.ndarray, np.ndarray]:
+def _parse_obstacle_box(obstacle: Any) -> Tuple[np.ndarray, np.ndarray]:
     """Normalize a cone obstacle to an axis-aligned bounding box."""
     if isinstance(obstacle, dict) and "bbox_min" in obstacle and "bbox_max" in obstacle:
         bbox_min = _as_vector3(obstacle["bbox_min"], "bbox_min")
@@ -442,7 +499,7 @@ def point_make_and_map(
     lidar_height: float = 1.0,
     global_map: Optional[np.ndarray] = None,
     rng: Optional[np.random.Generator] = None,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> Tuple[np.ndarray, np.ndarray]:
     """
     Backward-compatible helper: generate cone surface points and ground points.
     """
@@ -478,8 +535,8 @@ class LidarSimulator:
     def set_seed(self, seed: Optional[int]) -> None:
         self.rng = np.random.default_rng(seed)
 
-    def transform_cones_to_lidar(self, cones: Iterable[Any], vehicle_pose: Any) -> list[ConeRecord]:
-        lidar_cones: list[ConeRecord] = []
+    def transform_cones_to_lidar(self, cones: Iterable[Any], vehicle_pose: Any):
+        lidar_cones = []
         for cone in cones:
             record = normalize_cone(cone)
             lidar_position = world_to_lidar(
@@ -499,10 +556,10 @@ class LidarSimulator:
             )
         return lidar_cones
 
-    def visible_cones(self, cones: Iterable[Any], vehicle_pose: Any) -> list[dict[str, Any]]:
+    def visible_cones(self, cones: Iterable[Any], vehicle_pose: Any):
         """Return visible cones in LiDAR coordinates with noisy measured centers."""
         lidar_cones = self.transform_cones_to_lidar(cones, vehicle_pose)
-        visible: list[dict[str, Any]] = []
+        visible = []
         origin = np.zeros(3, dtype=float)
 
         for index, cone in enumerate(lidar_cones):
@@ -547,10 +604,10 @@ class LidarSimulator:
         visible.sort(key=lambda item: item["distance"])
         return visible
 
-    def simulate_scan(self, cones: Iterable[Any], vehicle_pose: Any) -> dict[str, Any]:
+    def simulate_scan(self, cones: Iterable[Any], vehicle_pose: Any) -> Dict[str, Any]:
         """Generate one LiDAR scan in the LiDAR frame."""
         visible = self.visible_cones(cones, vehicle_pose)
-        cone_clouds: list[np.ndarray] = []
+        cone_clouds = []
 
         for cone in visible:
             n_points = int(
@@ -607,13 +664,8 @@ class LidarSimulator:
 
 
 def main() -> None:
-    cones = [
-        {"position": [5.0, 0.0, 0.0], "color": "yellow"},
-        {"position": [2.5, 0.0, 0.0], "color": "blue"},
-        {"position": [8.0, 4.0, 0.0], "color": "orange"},
-        {"position": [-3.0, 0.0, 0.0], "color": "red"},
-    ]
-    vehicle_pose = [0.0, 0.0, 0.0]
+    default_track = Path(__file__).resolve().parents[1] / "tracks" / "trackdrive.yaml"
+    cones, vehicle_pose = load_track_yaml(default_track)
     simulator = LidarSimulator(seed=42)
     scan = simulator.simulate_scan(cones, vehicle_pose)
     print(f"visible_cones={len(scan['visible_cones'])}")

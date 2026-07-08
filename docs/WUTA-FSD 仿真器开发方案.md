@@ -69,9 +69,8 @@ src/simulation/wuta_simulator/
 │   └── simulator.launch.py     # 一键启动仿真器 + FSD 管线
 ├── wuta_simulator/
 │   ├── __init__.py
-|   |—— track_loader.py
 │   ├── vehicle_model.py        # 自行车运动学模型
-│   ├── lidar_simulator.py      # 射线投射模拟 LiDAR
+│   ├── lidar_simulator.py      # 直接读取赛道 YAML，射线投射模拟 LiDAR
 │   ├── ins_simulator.py        # 模拟 CG-410 INS
 │   └── can_simulator.py        # 模拟 CAN 车速上报
 └── tracks/
@@ -202,7 +201,7 @@ twist.linear.x = gt.speed
 /control/command → VehicleModel → GT pose → /localization/pose
                                             → /cg410/odometry
                                             → /localization/velocity
-                    TrackLoader  → LiDAR Sim → /hesai/pandar
+                    tracks/*.yaml → LiDAR Sim → /hesai/pandar
 
 FSD: lidar_detection → cone_map_builder → boundary → path_gen → controller
                                                                     ↑
@@ -259,9 +258,7 @@ RViz2 中 Fixed Frame 设为 map，就能看到完整仿真画面：赛道、车
 
 4. 写 [can\_simulator\.py](http://can_simulator.py) — 发布 /localization/velocity
 
-5. 写 [track\_loader\.py](http://track_loader.py) — 加载 YAML 地图
-
-6. 写 [lidar\_simulator\.py](http://lidar_simulator.py) — 射线投射 \+ 地面点
+5. 写 [lidar\_simulator\.py](http://lidar_simulator.py) — 直接加载 YAML 地图，射线投射 \+ 地面点
 
 7. LiDAR 仿真数据喂给 lidar\_detection\_node，跑完整感知链路
 
@@ -274,6 +271,5 @@ RViz2 中 Fixed Frame 设为 map，就能看到完整仿真画面：赛道、车
 11. 指标统计（跑完用时、路径偏差、是否撞锥筒）
 
 ---
-
 
 

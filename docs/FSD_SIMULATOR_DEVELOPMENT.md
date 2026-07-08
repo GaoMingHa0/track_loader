@@ -629,7 +629,6 @@ ros2_ws/src/simulation/wuta_simulator/
     simulator.launch.py
   wuta_simulator/
     __init__.py
-    track_loader.py
     vehicle_model.py
     lidar_simulator.py
     ins_simulator.py
@@ -645,9 +644,8 @@ ros2_ws/src/simulation/wuta_simulator/
 
 | 模块 | 输入 | 输出 | 说明 |
 |---|---|---|---|
-| `track_loader.py` | 赛道 YAML | 全局锥桶列表 | 加载 blue/yellow/orange cones 与 start pose |
 | `vehicle_model.py` | `/control/command` | `/sim/ground_truth`、可选 `/localization/pose` | 自行车运动学模型 |
-| `lidar_simulator.py` | `/sim/ground_truth` + 赛道锥桶 | `/hesai/pandar` | 简化射线/点云生成 |
+| `lidar_simulator.py` | `/sim/ground_truth` + 赛道 YAML | `/hesai/pandar` | 直接读取 YAML，完成可见性判断、遮挡和点云生成 |
 | `ins_simulator.py` | `/sim/ground_truth` | `/cg410/odometry` | 加噪 GNSS/INS 融合位姿 |
 | `can_simulator.py` | `/sim/ground_truth` | `/localization/velocity` | 发布实际车速反馈 |
 | `sim_mission_manager.py` | 配置/键盘/测试脚本 | `/system/mission_state` | 测试阶段可绕过现有 mission_manager |
@@ -749,7 +747,7 @@ twist.linear.y = 0.0
                                   -> /localization/pose
                                   -> /localization/velocity
 
-TrackLoader -> LiDAR Simulator -> /hesai/pandar
+tracks/*.yaml -> LiDAR Simulator -> /hesai/pandar
 
 FSD:
   lidar_detection -> cone_map_builder -> boundary_detector
@@ -788,7 +786,7 @@ FSD:
 | 6 | `/control/command` | `autoware_msgs/msg/Command` | 50 Hz | `controller_node` | `vehicle_model` | FSD -> 仿真器 |
 | 7 | `/system/mission_state` | `wuta_msgs/msg/MissionState` | 10-50 Hz | `mission_manager` 或 `sim_mission_manager` | FSD 全部关键节点 | 状态管理 |
 | 8 | `/mapping/cone_map` | `wuta_msgs/msg/ConeMap` | 5 Hz | `cone_map_builder` | `mission_manager`、`boundary_detector` | FSD |
-| 9 | `/sim/track_viz` | `visualization_msgs/msg/MarkerArray` | 1-5 Hz | `track_loader`/可视化节点 | RViz | 仿真器调试 |
+| 9 | `/sim/track_viz` | `visualization_msgs/msg/MarkerArray` | 1-5 Hz | `lidar_simulator`/可视化节点 | RViz | 仿真器调试 |
 
 ## 20. RViz2 可视化建议
 
@@ -822,7 +820,7 @@ FSD 已有可视化：
 
 | 小组 | 模块 |
 |---|---|
-| 感知组 | `lidar_simulator`、`track_loader` |
+| 感知组 | `lidar_simulator`（直接读取赛道 YAML） |
 | 定位建图组 | `ins_simulator`、模式 B 定位链路对接 |
 | 规控组 | `vehicle_model`、`can_simulator`、控制闭环 |
 
