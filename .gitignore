@@ -1,12 +1,6 @@
+```
 __pycache__/
-*.py[cod]
-*$py.class
-
-build/
-install/
-log/
-
-.pytest_cache/
-.coverage
-
-*.egg-info/
+*.pyc
+*.pyo
+*.pyd
+```
