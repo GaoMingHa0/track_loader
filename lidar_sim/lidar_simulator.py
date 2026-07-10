@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, Dict, Iterable, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Optional, Tuple
 
 import numpy as np
 import yaml
@@ -55,6 +55,12 @@ CONE_SPECS: Dict[str, ConeSpec] = {
     ),
 }
 
+# Precompute lookup maps for fast cone spec resolution
+_CONE_ALIAS_MAP: Dict[str, ConeSpec] = {}
+for _spec in CONE_SPECS.values():
+    for _alias in (_spec.name,) + _spec.aliases:
+        _CONE_ALIAS_MAP[_alias.lower()] = _spec
+
 DEFAULT_CONE_TYPE = "small_blue"
 
 #雷达参数
@@ -93,11 +99,16 @@ def _as_vector3(value: Any, name: str = "vector") -> np.ndarray: #私有函数
         raise ValueError(f"{name} must contain at least 3 values.")
     return arr[:3].copy() #复制一份新数组返回
 
-#绕z轴旋转的坐标变换,车辆不需要俯仰角转换
+#绕 z 轴旋转的坐标变换，车辆不需要俯仰角转换
+_YAW_ROTATION_CACHE: Dict[float, np.ndarray] = {}
 def _yaw_rotation(yaw: float) -> np.ndarray: #私有函数
+    # Check cache first for common yaw values
+    if yaw in _YAW_ROTATION_CACHE:
+        return _YAW_ROTATION_CACHE[yaw]
+    
     c = float(np.cos(yaw))
     s = float(np.sin(yaw))
-    return np.array(
+    rot = np.array(
         [
             [c, -s, 0.0],
             [s, c, 0.0],
@@ -105,6 +116,13 @@ def _yaw_rotation(yaw: float) -> np.ndarray: #私有函数
         ],
         dtype=float,
     )
+    
+    # Cache the result (limit cache size to prevent memory issues)
+    if len(_YAW_ROTATION_CACHE) < 1000:
+        _YAW_ROTATION_CACHE[yaw] = rot
+    
+    return rot
+
 
 #位姿解析器
 def parse_pose(pose: Any) -> Tuple[np.ndarray, float]:
@@ -136,11 +154,11 @@ def _cone_spec_from_kind(kind: Optional[Any]) -> ConeSpec:
     if kind is None:
         return CONE_SPECS[DEFAULT_CONE_TYPE]
 
-    normalized = str(kind).strip().lower() #kind转为小写字符串,去掉首尾空格
-    for spec in CONE_SPECS.values(): #CONE_SPECS.values()返回字典中所有的值,即所有的ConeSpec对象
-        if normalized == spec.name or normalized in spec.aliases:
-            return spec #符合就返回conespec对象
-    raise ValueError(f"Unknown cone type/color: {kind!r}") #找不到报错
+    normalized = str(kind).strip().lower()
+    spec = _CONE_ALIAS_MAP.get(normalized)
+    if spec is not None:
+        return spec
+    raise ValueError(f"Unknown cone type/color: {kind!r}")
 
 #优先级查找 #optional参数,可以为None,返回值为ConeSpec对象
 def _spec_from_color_and_type(color: Optional[Any], cone_type: Optional[Any]) -> ConeSpec:
@@ -290,7 +308,9 @@ def front(car_position: Any, car_heading: float, cone_position: Any) -> bool:
     x_forward = delta[0] * np.cos(car_heading) + delta[1] * np.sin(car_heading) #车头朝向与向量的点积
     return bool(x_forward > 0.0)
 
-#2.锥桶在水平视角范围内吗?(雷达只有120°的水平视角,所以要判断锥桶是否在这个范围内)
+# Pre-compute half FOV in radians for common values
+_FOV_RAD_CACHE = {120.0: np.radians(60.0), 90.0: np.radians(45.0), 180.0: np.radians(90.0), 360.0: np.pi}
+
 def angle_judge(
     car_position: Any,
     car_heading: float,
@@ -298,15 +318,29 @@ def angle_judge(
     fov_deg: float = 120.0,
 ) -> bool:
     """Return True when the cone is inside the horizontal LiDAR FOV."""
-    car_position = _as_vector3(car_position, "car_position")
-    cone_position = _as_vector3(cone_position, "cone_position")
-    dx = cone_position[0] - car_position[0]
-    dy = cone_position[1] - car_position[1]
-    angle_to_cone = np.arctan2(dy, dx) #计算车头指向锥桶的角度,与世界坐标系x轴正向的夹角
-    relative_angle = angle_to_cone - car_heading #计算锥桶相对于车头的角度
-    relative_angle = (relative_angle + np.pi) % (2 * np.pi) - np.pi #将角度归一化到[-pi, pi]范围内
-    half_fov = np.radians(fov_deg / 2.0)
-    return bool(abs(relative_angle) <= half_fov) #偏角绝对是是否小于等于视角范围的1/2
+    # Avoid _as_vector3 overhead when we know inputs are already numpy arrays
+    if hasattr(car_position, '__getitem__') and hasattr(cone_position, '__getitem__'):
+        dx = cone_position[0] - car_position[0]
+        dy = cone_position[1] - car_position[1]
+    else:
+        car_position = _as_vector3(car_position, "car_position")
+        cone_position = _as_vector3(cone_position, "cone_position")
+        dx = cone_position[0] - car_position[0]
+        dy = cone_position[1] - car_position[1]
+    
+    # Use atan2 to get angle directly
+    angle_to_cone = np.arctan2(dy, dx)
+    relative_angle = angle_to_cone - car_heading
+    
+    # Normalize to [-pi, pi] using a faster method
+    while relative_angle > np.pi:
+        relative_angle -= 2 * np.pi
+    while relative_angle < -np.pi:
+        relative_angle += 2 * np.pi
+    
+    # Use cached or computed half_fov
+    half_fov = _FOV_RAD_CACHE.get(fov_deg, np.radians(fov_deg / 2.0))
+    return bool(abs(relative_angle) <= half_fov)
 
 #3.锥桶在距离范围内吗? 
 def distance_judge(
@@ -570,35 +604,56 @@ class LidarSimulator:
         lidar_cones = self.transform_cones_to_lidar(cones, vehicle_pose)
         visible = []
         origin = np.zeros(3, dtype=float)
-
+        
+        # Precompute constants
+        fov_deg = self.config.fov_deg
+        min_range = self.config.min_range
+        max_range = self.config.max_range
+        enable_occlusion = self.config.enable_occlusion
+        detection_prob = self.config.detection_probability
+        center_noise_std = self.config.center_noise_std
+        
+        # Pre-filter cones by distance and FOV using vectorized operations where possible
+        candidate_indices = []
         for index, cone in enumerate(lidar_cones):
-            if not judge(
-                origin,
-                0.0,
-                cone.position,
-                None,
-                self.config.fov_deg,
-                self.config.min_range,
-                self.config.max_range,
-            ):
+            # Quick distance check first (cheapest)
+            dist_sq = cone.position[0]**2 + cone.position[1]**2
+            if dist_sq < min_range**2 or dist_sq > max_range**2:
                 continue
-
-            if self.config.enable_occlusion:
-                obstacles = [other for other_index, other in enumerate(lidar_cones) if other_index != index]
+            
+            # Check FOV
+            if not angle_judge(origin, 0.0, cone.position, fov_deg):
+                continue
+                
+            # Check if in front
+            if not front(origin, 0.0, cone.position):
+                continue
+            
+            candidate_indices.append(index)
+        
+        # Build obstacle list once for occlusion checking
+        if enable_occlusion and len(candidate_indices) > 1:
+            candidate_cones = [lidar_cones[i] for i in candidate_indices]
+            
+            for idx_in_candidates, cone_idx in enumerate(candidate_indices):
+                cone = lidar_cones[cone_idx]
+                
+                # Occlusion check with other candidate cones only
+                obstacles = [other for j, other in enumerate(candidate_cones) if j != idx_in_candidates]
                 if occlusion_judge(origin, cone.position, obstacles):
                     continue
-
-            if self.config.detection_probability < 1.0:
-                if self.rng.random() > self.config.detection_probability:
+                
+                # Detection probability check
+                if detection_prob < 1.0 and self.rng.random() > detection_prob:
                     continue
-
-            measured_position = cone.position.copy()
-            if self.config.center_noise_std > 0.0:
-                measured_position += self.rng.normal(0.0, self.config.center_noise_std, 3)
-
-            visible.append(
-                {
-                    "index": index,
+                
+                # Add noise and record
+                measured_position = cone.position.copy()
+                if center_noise_std > 0.0:
+                    measured_position += self.rng.normal(0.0, center_noise_std, 3)
+                
+                visible.append({
+                    "index": cone_idx,
                     "position": measured_position,
                     "true_position": cone.position.copy(),
                     "color": cone.color,
@@ -606,9 +661,32 @@ class LidarSimulator:
                     "type": cone.cone_type,
                     "size": cone.size.copy(),
                     "confidence": cone.confidence,
-                    "distance": float(np.linalg.norm(cone.position[:2])),
-                }
-            )
+                    "distance": float(np.sqrt(dist_sq)),
+                })
+        else:
+            # No occlusion checking - simpler path
+            for cone_idx in candidate_indices:
+                cone = lidar_cones[cone_idx]
+                
+                if detection_prob < 1.0 and self.rng.random() > detection_prob:
+                    continue
+                
+                measured_position = cone.position.copy()
+                if center_noise_std > 0.0:
+                    measured_position += self.rng.normal(0.0, center_noise_std, 3)
+                
+                dist_sq = cone.position[0]**2 + cone.position[1]**2
+                visible.append({
+                    "index": cone_idx,
+                    "position": measured_position,
+                    "true_position": cone.position.copy(),
+                    "color": cone.color,
+                    "color_id": cone.color_id,
+                    "type": cone.cone_type,
+                    "size": cone.size.copy(),
+                    "confidence": cone.confidence,
+                    "distance": float(np.sqrt(dist_sq)),
+                })
 
         visible.sort(key=lambda item: item["distance"])
         return visible
