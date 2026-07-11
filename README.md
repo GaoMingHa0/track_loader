@@ -24,19 +24,6 @@ python3 -m pytest tests/test_lidar_core.py
 
 ### Run
 
-Interactive one-command launcher with track selection:
-
-```bash
-./run_simulator.sh
-```
-
-Skip the menu by passing a track name or YAML path:
-
-```bash
-./run_simulator.sh trackdrive
-./run_simulator.sh tracks/acceleration.yaml
-```
-
 ```bash
 ros2 launch lidar_sim lidar_simulator.launch.py
 ```
@@ -51,7 +38,9 @@ Default behavior:
 Override the track file:
 
 ```bash
-ros2 launch lidar_sim lidar_simulator.launch.py track_file:=/path/to/track.yaml
+ros2 launch lidar_sim lidar_simulator.launch.py track_file:=skidpad
+ros2 launch lidar_sim lidar_simulator.launch.py track_file:=acceleration
+ros2 launch lidar_sim lidar_simulator.launch.py track_file:=/absolute/path/to/custom_track.yaml
 ```
 
 Track YAML files live in `tracks/`; there is no separate `track_loader` layer.

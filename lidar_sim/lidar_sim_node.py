@@ -5,26 +5,25 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
 import numpy as np
-import rclpy 
+import rclpy
 from ament_index_python.packages import PackageNotFoundError, get_package_share_directory
-from geometry_msgs.msg import Point                     # 用于 Marker 的3D点
-from nav_msgs.msg import Odometry                       # 里程计消息（ground truth 订阅）
-from rclpy.node import Node                             # ROS2 Node 基类
-from sensor_msgs_py import point_cloud2                 # PointCloud2 构造工具
-from sensor_msgs.msg import PointCloud2                 # 点云消息
-from std_msgs.msg import Header                         # 消息头（时间戳+坐标系）
-from visualization_msgs.msg import Marker, MarkerArray  # RViz 可视化
+from geometry_msgs.msg import Point
+from nav_msgs.msg import Odometry
+from rclpy.node import Node
+from sensor_msgs_py import point_cloud2
+from sensor_msgs.msg import PointCloud2
+from std_msgs.msg import Header
+from visualization_msgs.msg import Marker, MarkerArray
 
 from .lidar_simulator import LidarConfig, LidarSimulator, load_track_yaml
 
-#三个工具函数
-#四元数转偏航角
+
 def _quaternion_to_yaw(q: Any) -> float:
     siny_cosp = 2.0 * (q.w * q.z + q.x * q.y)
     cosy_cosp = 1.0 - 2.0 * (q.y * q.y + q.z * q.z)
     return math.atan2(siny_cosp, cosy_cosp)
 
-#找yamal文件路径
+
 def _default_track_file() -> str:
     try:
         share_dir = Path(get_package_share_directory("lidar_sim"))
@@ -41,7 +40,46 @@ def _default_track_file() -> str:
     )
     return str(source_track)
 
-#根据颜色名称返回RGBA颜色值
+
+def _track_search_dirs() -> List[Path]:
+    dirs: List[Path] = []
+    try:
+        dirs.append(Path(get_package_share_directory("lidar_sim")) / "tracks")
+    except PackageNotFoundError:
+        pass
+
+    source_tracks = Path(__file__).resolve().parents[1] / "tracks"
+    dirs.append(source_tracks)
+    dirs.append(Path.cwd() / "tracks")
+    return dirs
+
+
+def _resolve_track_file(track_file: str) -> str:
+    if not track_file:
+        return _default_track_file()
+
+    raw_path = Path(track_file).expanduser()
+    if raw_path.exists():
+        return str(raw_path)
+
+    candidate_names = [raw_path.name]
+    if raw_path.suffix == "":
+        candidate_names.insert(0, f"{raw_path.name}.yaml")
+
+    for search_dir in _track_search_dirs():
+        for name in candidate_names:
+            candidate = search_dir / name
+            if candidate.exists():
+                return str(candidate)
+
+    searched = ", ".join(str(path) for path in _track_search_dirs())
+    raise FileNotFoundError(
+        f"Track file not found: {track_file}. "
+        f"Use an existing absolute path, or one of the installed track names "
+        f"(trackdrive, skidpad, acceleration). Searched: {searched}"
+    )
+
+
 def _marker_color(color: str) -> Tuple[float, float, float, float]:
     colors = {
         "blue": (0.05, 0.25, 1.0, 0.95),
@@ -52,43 +90,42 @@ def _marker_color(color: str) -> Tuple[float, float, float, float]:
     }
     return colors.get(color, colors["unknown"])
 
-#ros2节点类
+
 class LidarSimulatorNode(Node):
     def __init__(self) -> None:
         super().__init__("lidar_simulator")
-#参数声明
-        self.declare_parameter("track_file", _default_track_file()) #yaml路径
-        self.declare_parameter("ground_truth_topic", "/sim/ground_truth") #地面真值话题
-        self.declare_parameter("pointcloud_topic", "/hesai/pandar") #点云话题
-        self.declare_parameter("visible_markers_topic", "/sim/lidar/visible_cones") #可见锥桶话题
-        self.declare_parameter("publish_rate_hz", 10.0) #发布频率
-        self.declare_parameter("frame_id", "lidar")  #坐标系
-        self.declare_parameter("use_start_pose_until_odom", True) #使用起始位姿直到接收到里程计
-        self.declare_parameter("random_seed", 42) #随机种子
-        self.declare_parameter("fov_deg", 120.0) #视场角
-        self.declare_parameter("min_range", 1.5) #最小范围
-        self.declare_parameter("max_range", 50.0) #最大范围
-        self.declare_parameter("points_per_cone_min", 12)  #每个锥桶最少点数
-        self.declare_parameter("points_per_cone_max", 16)  #每个锥桶最多点数
-        self.declare_parameter("surface_noise_std", 0.02)  #表面噪声标准差
-        self.declare_parameter("center_noise_std", 0.02)  #中心噪声标准差
-        self.declare_parameter("ground_points_min", 200)   #地面点数最小值
-        self.declare_parameter("ground_points_max", 500)   #地面点数最大值
-        self.declare_parameter("ground_z_std", 0.05)       #地面Z轴标准差
-        self.declare_parameter("lidar_height", 1.0)        #激光雷达高度
-        self.declare_parameter("lidar_offset_x", 0.0)      #激光雷达偏移X
-        self.declare_parameter("lidar_offset_y", 0.0)      #激光雷达偏移Y
-        self.declare_parameter("lidar_offset_z", 1.0)      #激光雷达偏移Z
-        self.declare_parameter("detection_probability", 1.0) #检测概率
-        self.declare_parameter("include_ground", True)       #是否包含地面点
-        self.declare_parameter("enable_occlusion", True)     #是否启用遮挡检测
- #加载赛道
-        track_file = str(self.get_parameter("track_file").value)
-        if not track_file:
-            track_file = _default_track_file()
+
+        self.declare_parameter("track_file", _default_track_file())
+        self.declare_parameter("ground_truth_topic", "/sim/ground_truth")
+        self.declare_parameter("pointcloud_topic", "/hesai/pandar")
+        self.declare_parameter("visible_markers_topic", "/sim/lidar/visible_cones")
+        self.declare_parameter("track_markers_topic", "/sim/lidar/track_cones")
+        self.declare_parameter("publish_rate_hz", 10.0)
+        self.declare_parameter("frame_id", "lidar")
+        self.declare_parameter("use_start_pose_until_odom", True)
+        self.declare_parameter("random_seed", 42)
+        self.declare_parameter("fov_deg", 120.0)
+        self.declare_parameter("min_range", 1.5)
+        self.declare_parameter("max_range", 50.0)
+        self.declare_parameter("points_per_cone_min", 12)
+        self.declare_parameter("points_per_cone_max", 16)
+        self.declare_parameter("surface_noise_std", 0.02)
+        self.declare_parameter("center_noise_std", 0.02)
+        self.declare_parameter("ground_points_min", 200)
+        self.declare_parameter("ground_points_max", 500)
+        self.declare_parameter("ground_z_std", 0.05)
+        self.declare_parameter("lidar_height", 1.0)
+        self.declare_parameter("lidar_offset_x", 0.0)
+        self.declare_parameter("lidar_offset_y", 0.0)
+        self.declare_parameter("lidar_offset_z", 1.0)
+        self.declare_parameter("detection_probability", 1.0)
+        self.declare_parameter("include_ground", True)
+        self.declare_parameter("enable_occlusion", True)
+
+        track_file = _resolve_track_file(str(self.get_parameter("track_file").value))
         self.cones, self.start_pose = load_track_yaml(track_file)
         self.current_pose: Optional[List[float]] = None
-#配置激光雷达模拟器
+
         config = LidarConfig(
             fov_deg=float(self.get_parameter("fov_deg").value),
             min_range=float(self.get_parameter("min_range").value),
@@ -125,6 +162,11 @@ class LidarSimulatorNode(Node):
             str(self.get_parameter("visible_markers_topic").value),
             10,
         )
+        self.track_marker_pub = self.create_publisher(
+            MarkerArray,
+            str(self.get_parameter("track_markers_topic").value),
+            10,
+        )
         self.odom_sub = self.create_subscription(
             Odometry,
             str(self.get_parameter("ground_truth_topic").value),
@@ -141,7 +183,7 @@ class LidarSimulatorNode(Node):
             f"Loaded {len(self.cones)} cones from {track_file}; "
             f"publishing {self.get_parameter('pointcloud_topic').value} at {publish_rate_hz:.1f} Hz"
         )
-#里程计回调
+
     def _on_ground_truth(self, msg: Odometry) -> None:
         pose = msg.pose.pose
         self.current_pose = [
@@ -150,14 +192,14 @@ class LidarSimulatorNode(Node):
             float(pose.position.z),
             _quaternion_to_yaw(pose.orientation),
         ]
-#位姿选择
+
     def _active_pose(self) -> Optional[List[float]]:
-        if self.current_pose is not None: 
-            return self.current_pose   #优先：收到过里程计
+        if self.current_pose is not None:
+            return self.current_pose
         if self.use_start_pose_until_odom:
-            return self.start_pose #回退：赛道起始位姿
-        return None    # 都没有：跳过发布
-#主循环
+            return self.start_pose
+        return None
+
     def _publish_scan(self) -> None:
         vehicle_pose = self._active_pose()
         if vehicle_pose is None:
@@ -172,8 +214,9 @@ class LidarSimulatorNode(Node):
 
         cloud_points = np.asarray(scan["point_cloud"], dtype=np.float32)
         msg = point_cloud2.create_cloud_xyz32(header, cloud_points.tolist())
-        self.pointcloud_pub.publish(msg) #
-        self.marker_pub.publish(self._make_visible_markers(scan["visible_cones"], header)) #
+        self.pointcloud_pub.publish(msg)
+        self.marker_pub.publish(self._make_visible_markers(scan["visible_cones"], header))
+        self.track_marker_pub.publish(self._make_track_markers(stamp))
 
     def _make_visible_markers(self, visible_cones: List[Dict[str, Any]], header: Header) -> MarkerArray:
         marker_array = MarkerArray()
@@ -209,21 +252,57 @@ class LidarSimulatorNode(Node):
 
         return marker_array
 
-##spin() 的阻塞循环内部：
-#while rclpy.ok():
-#   检查订阅队列 → 有新 Odometry → 调用 _on_ground_truth()
-# 检查 Timer → 到期 → 调用 _publish_scan()
-# 检查其他回调...
-# #sleep(微小间隔) 
+    def _make_track_markers(self, stamp: Any) -> MarkerArray:
+        marker_array = MarkerArray()
+
+        clear_marker = Marker()
+        clear_marker.header.stamp = stamp
+        clear_marker.header.frame_id = "map"
+        clear_marker.action = Marker.DELETEALL
+        marker_array.markers.append(clear_marker)
+
+        for idx, cone in enumerate(self.cones):
+            marker = Marker()
+            marker.header.stamp = stamp
+            marker.header.frame_id = "map"
+            marker.ns = "track_cones"
+            marker.id = idx
+            marker.type = Marker.CYLINDER
+            marker.action = Marker.ADD
+            marker.pose.position = Point(
+                x=float(cone["position"][0]),
+                y=float(cone["position"][1]),
+                z=float(cone["position"][2]) + 0.25,
+            )
+            marker.pose.orientation.w = 1.0
+            size = cone.get("size", [0.3, 0.3, 0.5])
+            marker.scale.x = float(size[0])
+            marker.scale.y = float(size[1])
+            marker.scale.z = float(size[2])
+            r, g, b, a = _marker_color(str(cone["color"]))
+            marker.color.r = r
+            marker.color.g = g
+            marker.color.b = b
+            marker.color.a = a * 0.45
+            marker_array.markers.append(marker)
+
+        return marker_array
+
+
 def main(args: Optional[List[str]] = None) -> None:
     rclpy.init(args=args)
-    node = LidarSimulatorNode()
+    node: Optional[LidarSimulatorNode] = None
     try:
+        node = LidarSimulatorNode()
         rclpy.spin(node)
+    except KeyboardInterrupt:
+        pass
     finally:
-        node.destroy_node()
-        rclpy.shutdown()
-#节点一边听车辆模型的位姿变化，一边以 10Hz 的频率"替"禾赛雷达生成当前视角下的点云，
-# 在 FSD 算法栈看来和真实雷达别无二致。
+        if node is not None:
+            node.destroy_node()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
 if __name__ == "__main__":
     main()

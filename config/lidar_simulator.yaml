@@ -4,6 +4,7 @@ lidar_simulator:
     ground_truth_topic: "/sim/ground_truth"
     pointcloud_topic: "/hesai/pandar"
     visible_markers_topic: "/sim/lidar/visible_cones"
+    track_markers_topic: "/sim/lidar/track_cones"
     publish_rate_hz: 10.0
     frame_id: "lidar"
     use_start_pose_until_odom: true
