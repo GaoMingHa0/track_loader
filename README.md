@@ -81,3 +81,11 @@ Core-only demo:
 ```bash
 ros2 run lidar_sim lidar_simulator_demo
 ```
+
+### Acceleration track
+
+`track_file:=acceleration` 加载 `tracks/acceleration.yaml`。该 YAML 与根目录
+`docs/accelerationrules.txt` 一致：车辆参考点从 `x=-0.30 m` 静止起步，计时区为
+`x=0..75 m`，赛道宽度按锥桶内缘为 3 m，终点线后保留到 `x=175 m` 的 100 m 标记停止区。
+LiDAR 仿真只读取并可视化该赛道；固定的 75 m 计时路径和停止区制动逻辑由
+`WUTA-FSD` 的 `path_generator` 实现。
