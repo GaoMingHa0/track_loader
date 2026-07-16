@@ -54,6 +54,28 @@ ros2 launch lidar_sim lidar_simulator.launch.py track_file:=/absolute/path/to/cu
 
 Track YAML files live in `tracks/`; there is no separate `track_loader` layer.
 
+### Skidpad track
+
+`track_file:=skidpad` loads the FSAC figure-eight map from `tracks/skidpad.yaml`.
+Its map frame uses `+X` from the entrance to the exit: the vehicle starts at
+`(-15, 0, yaw=0)`, drives two clockwise laps around the lower/right circle,
+two counter-clockwise laps around the upper/left circle, then exits in `+X`.
+
+The YAML intentionally has four cone groups. Their color, type and physical
+size are carried into the simulated cloud and the static ground-truth marker
+map (`/sim/lidar/track_cones`):
+
+| YAML group | Visual color / type | Size (W × D × H, m) |
+| --- | --- | --- |
+| `blue_cones` | blue / `small_blue` | 0.20 × 0.20 × 0.30 |
+| `red_cones` | red / `small_red` | 0.20 × 0.20 × 0.30 |
+| `yellow_low_cones` | yellow / `small_yellow` | 0.20 × 0.20 × 0.30 |
+| `yellow_high_cones` | yellow / `large_yellow` | 0.35 × 0.35 × 0.70 |
+
+The high yellow cones mark the figure-eight tangent/changeover. The static
+map labels show each cone's ID, type and dimensions; this is simulator ground
+truth and is separate from the FSD estimate on `/mapping/cone_map_viz`.
+
 Core-only demo:
 
 ```bash
