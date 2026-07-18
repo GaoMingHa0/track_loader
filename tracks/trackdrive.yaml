@@ -778,3 +778,14 @@ track:
   orange_cones:
     - [0.0,  1.75, 0.0]
     - [0.0, -1.75, 0.0]
+
+  # 起终线由橙色锥桶定义。车辆沿 +X 方向第二次通过该线时完成一圈。
+  lines:
+    timing_start:
+      p1: [0.000, -1.750, 0.0]
+      p2: [0.000, 1.750, 0.0]
+      direction: positive_x
+    finish:
+      p1: [0.000, -1.750, 0.0]
+      p2: [0.000, 1.750, 0.0]
+      direction: positive_x
