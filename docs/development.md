@@ -66,3 +66,17 @@ colcon build --packages-select lidar_sim --symlink-install
 ros2 topic echo --once /sim/lidar/track_cones
 ```
 
+## 外部 Trackdrive 回归地图
+
+`tracks/` 目录同时保存内置赛道和外部回归赛道。`external_fsd_dataset_track_1.yaml`
+到 `external_fsd_dataset_track_9.yaml` 由 `iv461/fsd_racetrack_dataset` 转换而来，
+用于在不依赖赛道参考中心线的情况下检验感知、建图、规划和控制闭环。
+
+完整仿真中可直接从仓库根目录选择其中一张地图：
+
+```bash
+./start_simulator.sh --skip-build --rviz \
+  track_file:=external_fsd_dataset_track_7 \
+  mission_mode:=trackdrive \
+  use_ground_truth_localization:=true
+```

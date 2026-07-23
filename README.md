@@ -49,10 +49,16 @@ Override the track file:
 ```bash
 ros2 launch lidar_sim lidar_simulator.launch.py track_file:=skidpad
 ros2 launch lidar_sim lidar_simulator.launch.py track_file:=acceleration
+ros2 launch lidar_sim lidar_simulator.launch.py track_file:=external_fsd_dataset_track_7
 ros2 launch lidar_sim lidar_simulator.launch.py track_file:=/absolute/path/to/custom_track.yaml
 ```
 
 Track YAML files live in `tracks/`; there is no separate `track_loader` layer.
+
+External Trackdrive regression maps converted from `iv461/fsd_racetrack_dataset`
+are also stored in `tracks/` as `external_fsd_dataset_track_1.yaml` through
+`external_fsd_dataset_track_9.yaml`. They can be selected with the same
+`track_file:=external_fsd_dataset_track_N` shorthand as the built-in maps.
 
 ### Skidpad track
 
